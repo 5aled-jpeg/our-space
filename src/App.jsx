@@ -65,29 +65,47 @@ export default function App() {
     e.target.value = null; // reset
   };
   const handleFileImport = (e) => {
-     const file = e.target.files[0];
-     if (!file) return;
-     
-     const validAudioExtensions = ['.mp3', '.wav', '.m4a', '.ogg', '.aac', '.flac'];
-     const isAudio = file.type.startsWith('audio/') || validAudioExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
-     
-     if (isAudio) {
-        const url = URL.createObjectURL(file);
-        const { position, scale, addObject } = useStore.getState();
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const { position, scale, addObject, color } = useStore.getState();
+    const url = URL.createObjectURL(file);
+    const id = Date.now().toString();
+
+    const isAudio = file.type.startsWith('audio/') || ['.mp3', '.wav', '.m4a', '.ogg', '.aac', '.flac'].some(ext => file.name.toLowerCase().endsWith(ext));
+    const isVideo = file.type.startsWith('video/') || ['.mp4', '.webm', '.mov', '.ogg'].some(ext => file.name.toLowerCase().endsWith(ext));
+    const isImage = file.type.startsWith('image/');
+
+    if (isAudio) {
+      addObject({
+        id, type: 'audio', url, name: file.name, color,
+        x: -position.x / scale + 100,
+        y: -position.y / scale + 100,
+        width: 320, height: 80, scaleX: 1, scaleY: 1
+      });
+    } else if (isVideo) {
+      addObject({
+        id, type: 'video', url, name: file.name, color,
+        x: -position.x / scale + 100,
+        y: -position.y / scale + 100,
+        width: 480, height: 320, scaleX: 1, scaleY: 1
+      });
+    } else if (isImage) {
+      // For images, we try to get dimensions first
+      const img = new Image();
+      img.onload = () => {
         addObject({
-           id: Date.now().toString(),
-           type: 'audio',
-           url: url,
-           name: file.name,
-           x: -position.x / scale + 100,
-           y: -position.y / scale + 100,
-           width: 320,
-           height: 80,
-           scaleX: 1,
-           scaleY: 1
+          id, type: 'image', url, name: file.name,
+          x: -position.x / scale + 100,
+          y: -position.y / scale + 100,
+          width: img.width,
+          height: img.height,
+          scaleX: 1, scaleY: 1
         });
-     }
-     e.target.value = null; // reset input
+      };
+      img.src = url;
+    }
+    e.target.value = null;
   };
 
   const fonts = [
@@ -145,9 +163,57 @@ export default function App() {
       }
     };
 
+    const handlePaste = async (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (!file) continue;
+          
+          const { position, scale, addObject, color } = useStore.getState();
+          const url = URL.createObjectURL(file);
+          const id = Date.now().toString();
+
+          if (file.type.startsWith('image/')) {
+            const img = new Image();
+            img.onload = () => {
+              addObject({
+                id, type: 'image', url, name: file.name || 'Pasted Image',
+                x: -position.x / scale + 100,
+                y: -position.y / scale + 100,
+                width: img.width, height: img.height,
+                scaleX: 1, scaleY: 1
+              });
+            };
+            img.src = url;
+          } else if (file.type.startsWith('video/')) {
+            addObject({
+              id, type: 'video', url, name: file.name || 'Pasted Video', color,
+              x: -position.x / scale + 100,
+              y: -position.y / scale + 100,
+              width: 480, height: 320, scaleX: 1, scaleY: 1
+            });
+          } else if (file.type.startsWith('audio/')) {
+            addObject({
+              id, type: 'audio', url, name: file.name || 'Pasted Audio', color,
+              x: -position.x / scale + 100,
+              y: -position.y / scale + 100,
+              width: 320, height: 80, scaleX: 1, scaleY: 1
+            });
+          }
+        }
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setTool]);
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('paste', handlePaste);
+    };
+  }, [setTool, lines, texts, objects, position, scale, theme]);
 
   return (
     <div className="flex flex-col h-screen w-screen relative overflow-hidden select-none" style={{ backgroundColor: colors.bg }}>
@@ -413,7 +479,7 @@ export default function App() {
           
           <div className="w-[1px] h-8 mx-1 opacity-20" style={{ backgroundColor: colors.icon }} />
           
-          <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac" onChange={handleFileImport} />
+          <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,video/*,image/*,.mp3,.wav,.m4a,.mp4,.webm,.mov" onChange={handleFileImport} />
           <DockItem 
             icon={<Upload size={20} />} 
             onClick={() => {

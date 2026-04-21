@@ -1,7 +1,18 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Stage, Layer, Line, Text, Rect, Transformer } from 'react-konva';
+import { Stage, Layer, Line, Text, Rect, Transformer, Image } from 'react-konva';
 import { useStore } from '../store';
 import AudioPlayerWidget from './AudioPlayerWidget';
+import VideoPlayerWidget from './VideoPlayerWidget';
+
+const KonvaImage = ({ url, ...props }) => {
+   const [img, setImg] = useState(null);
+   useEffect(() => {
+      const image = new window.Image();
+      image.src = url;
+      image.onload = () => setImg(image);
+   }, [url]);
+   return img ? <Image image={img} {...props} /> : null;
+};
 
 export default function InfiniteCanvas() {
    const {
@@ -527,84 +538,115 @@ export default function InfiniteCanvas() {
                   />
                ))}
 
-               {/* Render Interactive Object Hitboxes (Video, Audio) */}
-               {objects.map((obj) => (
-                  <Rect
-                     key={obj.id}
-                     id={obj.id}
-                     name="object"
-                     x={obj.x}
-                     y={obj.y}
-                     width={obj.width}
-                     height={obj.height}
-                     scaleX={obj.scaleX || 1}
-                     scaleY={obj.scaleY || 1}
-                     fill="transparent"
-                     stroke={obj.type === 'audio' ? 'transparent' : ((selectedIds.includes(obj.id) && tool === 'select') ? '#3b82f6' : 'transparent')}
-                     strokeWidth={1 / scale}
-                     draggable={tool === 'select'}
-                     listening={true}
-                     onDragStart={(e) => {
-                        if (tool !== 'select') e.cancelBubble = true;
-                        dragPosRef.current = { x: e.target.x(), y: e.target.y() };
-                     }}
-                     onDragMove={(e) => {
-                        // For audio: throttle store updates via RAF so HTML overlay follows without spamming React renders
-                        if (obj.type === 'audio') {
-                           const nx = e.target.x();
-                           const ny = e.target.y();
-                           if (audioRafRef.current) cancelAnimationFrame(audioRafRef.current);
-                           audioRafRef.current = requestAnimationFrame(() => {
-                              updateObject(obj.id, { x: nx, y: ny });
-                           });
-                           return;
-                        }
-                        if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
-                           const dx = e.target.x() - dragPosRef.current.x;
-                           const dy = e.target.y() - dragPosRef.current.y;
-                           dragPosRef.current = { x: e.target.x(), y: e.target.y() };
-                           selectedIds.forEach(id => {
-                              if (id !== obj.id) {
-                                 const node = stageRef.current.findOne('#' + id);
-                                 if (node) {
-                                    node.x(node.x() + dx);
-                                    node.y(node.y() + dy);
-                                 }
-                              }
-                           });
-                           stageRef.current.batchDraw();
-                        }
-                     }}
-                     onDragEnd={(e) => {
-                        if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
-                           selectedIds.forEach(id => {
-                              const node = stageRef.current.findOne('#' + id);
-                              if (node) {
-                                 if (node.className === 'Text') updateText(id, { x: node.x(), y: node.y() });
-                                 else if (node.className === 'Line') updateLine(id, { x: node.x(), y: node.y() });
-                                 else if (node.className === 'Rect') updateObject(id, { x: node.x(), y: node.y() });
-                              }
-                           });
-                        } else {
-                           updateObject(obj.id, { x: e.target.x(), y: e.target.y() });
-                        }
-                     }}
-                     onTransformEnd={(e) => {
-                        const node = e.target;
-                        updateObject(obj.id, {
-                           x: node.x(),
-                           y: node.y(),
-                           scaleX: node.scaleX(),
-                           scaleY: node.scaleY()
-                        });
-                     }}
-                  />
-               ))}
+                {/* Render Static Objects (Images) */}
+                {objects.filter(obj => obj.type === 'image').map((obj) => (
+                   <KonvaImage
+                      key={obj.id}
+                      id={obj.id}
+                      url={obj.url}
+                      x={obj.x}
+                      y={obj.y}
+                      width={obj.width}
+                      height={obj.height}
+                      scaleX={obj.scaleX || 1}
+                      scaleY={obj.scaleY || 1}
+                      name="object"
+                      draggable={tool === 'select'}
+                      stroke={(selectedIds.includes(obj.id) && tool === 'select') ? '#3b82f6' : 'transparent'}
+                      strokeWidth={2 / scale}
+                      onDragEnd={(e) => {
+                         updateObject(obj.id, { x: e.target.x(), y: e.target.y() });
+                      }}
+                      onTransformEnd={(e) => {
+                         const node = e.target;
+                         updateObject(obj.id, {
+                            x: node.x(),
+                            y: node.y(),
+                            scaleX: node.scaleX(),
+                            scaleY: node.scaleY()
+                         });
+                      }}
+                   />
+                ))}
+
+                {/* Render Interactive Object Hitboxes (Video, Audio) */}
+                {objects.filter(obj => obj.type !== 'image').map((obj) => (
+                   <Rect
+                      key={obj.id}
+                      id={obj.id}
+                      name="object"
+                      x={obj.x}
+                      y={obj.y}
+                      width={obj.width}
+                      height={obj.height}
+                      scaleX={obj.scaleX || 1}
+                      scaleY={obj.scaleY || 1}
+                      fill="transparent"
+                      stroke={['audio', 'video'].includes(obj.type) ? 'transparent' : ((selectedIds.includes(obj.id) && tool === 'select') ? '#3b82f6' : 'transparent')}
+                      strokeWidth={1 / scale}
+                      draggable={tool === 'select'}
+                      listening={true}
+                      onDragStart={(e) => {
+                         if (tool !== 'select') e.cancelBubble = true;
+                         dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                      }}
+                      onDragMove={(e) => {
+                         // For audio/video: throttle store updates via RAF so HTML overlay follows smoothly
+                         if (obj.type === 'audio' || obj.type === 'video') {
+                            const nx = e.target.x();
+                            const ny = e.target.y();
+                            if (audioRafRef.current) cancelAnimationFrame(audioRafRef.current);
+                            audioRafRef.current = requestAnimationFrame(() => {
+                               updateObject(obj.id, { x: nx, y: ny });
+                            });
+                            return;
+                         }
+                         if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
+                            const dx = e.target.x() - dragPosRef.current.x;
+                            const dy = e.target.y() - dragPosRef.current.y;
+                            dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                            selectedIds.forEach(id => {
+                               if (id !== obj.id) {
+                                  const node = stageRef.current.findOne('#' + id);
+                                  if (node) {
+                                     node.x(node.x() + dx);
+                                     node.y(node.y() + dy);
+                                  }
+                               }
+                            });
+                            stageRef.current.batchDraw();
+                         }
+                      }}
+                      onDragEnd={(e) => {
+                         if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
+                            selectedIds.forEach(id => {
+                               const node = stageRef.current.findOne('#' + id);
+                               if (node) {
+                                  if (node.className === 'Text') updateText(id, { x: node.x(), y: node.y() });
+                                  else if (node.className === 'Line') updateLine(id, { x: node.x(), y: node.y() });
+                                  else if (node.className === 'Rect' || node.className === 'Image') updateObject(id, { x: node.x(), y: node.y() });
+                               }
+                            });
+                         } else {
+                            updateObject(obj.id, { x: e.target.x(), y: e.target.y() });
+                         }
+                      }}
+                      onTransformEnd={(e) => {
+                         const node = e.target;
+                         updateObject(obj.id, {
+                            x: node.x(),
+                            y: node.y(),
+                            scaleX: node.scaleX(),
+                            scaleY: node.scaleY()
+                         });
+                      }}
+                   />
+                ))}
 
                {/* Transformer - Only visible in Select mode */}
                {tool === 'select' && selectedIds.length > 0 && (() => {
-                  const isAudioOnly = selectedIds.length === 1 && objects.find(o => o.id === selectedIds[0] && o.type === 'audio');
-                  if (isAudioOnly) return null; // We hide Transformer completely for audio to favor native DOM resizing
+                  const isWidgetOnly = selectedIds.length === 1 && objects.find(o => o.id === selectedIds[0] && ['audio', 'video'].includes(o.type));
+                  if (isWidgetOnly) return null; // We hide Transformer completely for widgets to favor native DOM resizing
                   
                   return (
                      <Transformer
@@ -613,18 +655,13 @@ export default function InfiniteCanvas() {
                            if (newBox.width < 30) return oldBox;
                            return newBox;
                         }}
-                        rotateEnabled={false}
+                        rotateEnabled={true}
                         flipEnabled={false}
                         anchorSize={8}
                         anchorFill="#3b82f6"
                         anchorStroke="#ffffff"
                         borderStroke="#3b82f6"
                         padding={5}
-                        enabledAnchors={
-                           (() => {
-                              return ['middle-left', 'middle-right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'];
-                           })()
-                        }
                      />
                   );
                })()}
@@ -699,7 +736,7 @@ export default function InfiniteCanvas() {
             />
          )}
 
-         {/* Audio Objects HTML Widget Overlays */}
+         {/* Widget Overlays (Audio, Video) */}
          {objects && objects.map((obj) => {
             if (obj.type === 'audio') {
                return (
@@ -712,7 +749,26 @@ export default function InfiniteCanvas() {
                      y={(obj.y * scale) + position.y}
                      width={obj.width * (obj.scaleX || 1)}
                      scale={scale}
-                     // FIX 2: use object's own stored color, not global color
+                     color={obj.color || '#ffffff'}
+                     isSelected={selectedIds.includes(obj.id)}
+                     onContextMenu={(screenX, screenY) => {
+                        setAudioContextMenu({ id: obj.id, x: screenX, y: screenY, color: obj.color || '#ffffff' });
+                        setTextContextMenu(null);
+                     }}
+                  />
+               );
+            }
+            if (obj.type === 'video') {
+               return (
+                  <VideoPlayerWidget 
+                     key={obj.id}
+                     id={obj.id}
+                     url={obj.url}
+                     fileName={obj.name}
+                     x={(obj.x * scale) + position.x}
+                     y={(obj.y * scale) + position.y}
+                     width={obj.width * (obj.scaleX || 1)}
+                     scale={scale}
                      color={obj.color || '#ffffff'}
                      isSelected={selectedIds.includes(obj.id)}
                      onContextMenu={(screenX, screenY) => {

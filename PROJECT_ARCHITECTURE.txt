@@ -1,0 +1,77 @@
+Vision Workspace - Deep Architecture Documentation
+--------------------------------------------------
+
+This document provides a technical deep-dive into the architecture of the Vision Workspace application. It covers how the desktop environment, state management, and the canvas engine work together.
+
+1. TECH STACK OVERVIEW
+----------------------
+- Framework: React (Frontend)
+- Build Tool: Vite (Fast HMR and bundling)
+- Desktop Wrapper: Electron (Node.js bridge to OS)
+- Physics/Canvas: Konva & React-Konva (Canvas API wrapper)
+- State Management: Zustand (Global proxy-based state)
+- Animations: Framer Motion (Spring physics and layout transitions)
+- Styling: Tailwind CSS & Custom CSS (Glassmorphism engine)
+
+2. CORE FOLDERS & FILES
+-----------------------
+
+📁 [electron/] - The "Host" Process
+- electron/main.js:
+  This is the entry point for the desktop app. It handles:
+  - BrowserWindow Creation: Configures the "frameless" look (transparent: true, frame: false).
+  - WebKitAppRegion: Handles the window dragging logic (drag: 'drag' vs 'no-drag').
+  - IPC (Inter-Process Communication): Handles commands to close, minimize, or maximize the window.
+  - Development vs Production: Detects if running via 'npm run dev' (loading localhost:5173) or from a built file.
+
+📁 [src/] - The React Environment
+- main.jsx: 
+  The entry point for the frontend, mounting the root App component into the #root DOM node in index.html.
+
+- store.js: 
+  The "Single Source of Truth." It uses Zustand for reactive state.
+  - Pattern: Every tool setting (color, sizes, fonts) is stored here. 
+  - Dynamic Themes: Contains a "themes" object with HSL/Hex values for Dark, Light, and Pink modes.
+  - Persistence: Manages the 'lines', 'texts', and 'objects' arrays which define what is visible on the canvas.
+
+- App.jsx: 
+  The "UI Orchestrator." It does not handle drawing; it handles the "Chrome" (UI around the canvas).
+  - Dock (Toolbar): Uses Framer Motion for the bouncy "Mac-style" lift animations.
+  - Active Indicator: The "Hot Line" uses the 'layoutId' prop in Framer Motion to animate the underline from one icon to another smoothly.
+  - Context Menus: Logic for right-clicking tools helps center the styling menus exactly above the dock, solving viewport clipping issues.
+
+- index.css: 
+  The "Design System." 
+  - Glass-Card: Defines the .glass-toolbar class. It uses 'backdrop-filter: blur(50px)' and custom inset shadows to mimic premium frosted glass.
+  - Scrollbars: Hidden for an immersive canvas feel.
+
+📁 [src/components/] - Specialized Logic
+- InfiniteCanvas.jsx: 
+  The "Engine Room." This is where the actual math happens.
+  - Coordinate Mapping: Uses complex logic to convert Screen Coordinates (clientX/Y) into Canvas Coordinates (taking into account the current Zoom Scale and Pan Position).
+  - Drawing Logic: Uses Konva.Line to render strokes. For "Eraser" mode, it uses 'globalCompositeOperation: destination-out'.
+  - Text Tool:
+    - Click-to-Edit: Detects if your mouse click hit a Konva.Text node by checking 'e.target'.
+    - Area Text: Uses a 'tempRect' state to draw a dashed box while dragging, then spawns a <textarea> overlay with that exact width.
+    - Multiline: Syncs the HTML <textarea> (for input) back into the Konva.Text node (for rendering).
+
+3. HOW THE INFINITE CANVAS WORKS (MATH)
+---------------------------------------
+The "Infinite" feel is achieved by translating the <Stage /> position and scale. 
+- Panning: When using the Select Tool, we update 'position.x/y' in the store.
+- Zooming: We calculate a "Mouse Point to Zoom" ratio to ensure the canvas zooms relative to your cursor instead of the top-left corner.
+- Rendering: To stay fast, Konva only re-draws the changed parts of the Layer.
+
+4. UI PHILOSOPHY (The "Smart" Logic)
+------------------------------------
+- The "Smart Selection": In the DockItem, we use an absolute top-positioned <motion.div> for the label that appears only on hover.
+- Color Sync: The brush preview in the menus dynamically changes border styles depending on whether the tool is 'pen' (solid) or 'eraser' (dashed).
+
+5. BUILD & RUN PIPELINE
+-----------------------
+- Execution: 'npm run dev' starts two processes:
+  1. Vite: Runs the React frontend at localhost:5173.
+  2. Electron: Launches the desktop shell and points it to that URL.
+
+--------------------------------------------------
+DOCUMENT END. Prepared for Khaled - Vision Workspace v0.1

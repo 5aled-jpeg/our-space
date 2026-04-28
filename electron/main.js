@@ -2,6 +2,9 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// Fix for DirectComposition/Hardware Acceleration error on Windows
+app.disableHardwareAcceleration();
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function createWindow() {

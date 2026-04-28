@@ -27,6 +27,24 @@ const themes = {
     icon: '#002137',
     accent: '#ffafcc',
     border: 'rgba(255, 255, 255, 0.2)'
+  },
+  cream: {
+    bg: '#f8f1e9',
+    panel: 'rgba(230, 215, 200, 0.4)',
+    dockBg: 'rgba(240, 230, 220, 0.8)',
+    text: '#5d544b',
+    icon: '#5d544b',
+    accent: '#c8ad93',
+    border: 'rgba(93, 84, 75, 0.1)'
+  },
+  cyber: {
+    bg: '#050515',
+    panel: 'rgba(20, 20, 50, 0.5)',
+    dockBg: 'rgba(10, 10, 30, 0.8)',
+    text: '#00f2ff',
+    icon: '#00f2ff',
+    accent: '#ff00ff',
+    border: 'rgba(0, 242, 255, 0.2)'
   }
 };
 
@@ -79,6 +97,8 @@ export const useStore = create((set, get) => ({
   updatePosition: (pos) => set({ position: pos }),
   updateScale: (scale) => set({ scale }),
 
+  saveHistory: () => set((state) => ({ ...pushHistory(state) })),
+
   // ── Lines ─────────────────────────────────────────────
   addLine: (line) => set((state) => ({
     ...pushHistory(state),
@@ -89,7 +109,8 @@ export const useStore = create((set, get) => ({
     newLines[newLines.length - 1] = updatedLine;
     return { lines: newLines };
   }),
-  updateLine: (id, updates) => set((state) => ({
+  updateLine: (id, updates, push = false) => set((state) => ({
+    ...(push ? pushHistory(state) : {}),
     lines: state.lines.map((line, i) => {
       const lineId = line.id || `line-${i}`;
       return lineId === id ? { ...line, ...updates } : line;
@@ -101,7 +122,8 @@ export const useStore = create((set, get) => ({
     ...pushHistory(state),
     texts: [...state.texts, text]
   })),
-  updateText: (id, updates) => set((state) => ({
+  updateText: (id, updates, push = false) => set((state) => ({
+    ...(push ? pushHistory(state) : {}),
     texts: state.texts.map(t => t.id === id ? { ...t, ...updates } : t)
   })),
 
@@ -110,7 +132,8 @@ export const useStore = create((set, get) => ({
     ...pushHistory(state),
     objects: [...state.objects, obj]
   })),
-  updateObject: (id, updates) => set((state) => ({
+  updateObject: (id, updates, push = false) => set((state) => ({
+    ...(push ? pushHistory(state) : {}),
     objects: state.objects.map(obj => obj.id === id ? { ...obj, ...updates } : obj)
   })),
 

@@ -3,6 +3,7 @@ import { Stage, Layer, Line, Text, Rect, Transformer, Image } from 'react-konva'
 import { useStore } from '../store';
 import AudioPlayerWidget from './AudioPlayerWidget';
 import VideoPlayerWidget from './VideoPlayerWidget';
+import GifPlayerWidget from './GifPlayerWidget';
 
 const KonvaImage = ({ url, ...props }) => {
    const [img, setImg] = useState(null);
@@ -20,7 +21,7 @@ export default function InfiniteCanvas() {
       texts, addText, updateText,
       objects, addObject, updateObject,
       deleteItems,
-      undo, redo,
+      undo, redo, saveHistory,
       tool, color, brushSize, eraserSize,
       fontSize, fontFamily,
       position, updatePosition, scale, updateScale
@@ -116,7 +117,7 @@ export default function InfiniteCanvas() {
    const handleMouseDown = (e) => {
       // Ignore click actions for Hand Tool (panning only)
       if (tool === 'hand') {
-         setSelectedId(null);
+         setSelectedIds([]);
          return;
       }
 
@@ -247,6 +248,19 @@ export default function InfiniteCanvas() {
       const lastLine = lines[lines.length - 1];
       const newPoints = lastLine.points.concat([stageX, stageY]);
       updateLastLine({ ...lastLine, points: newPoints });
+
+      // Vector Eraser: Delete objects intersected by the eraser path
+      if (tool === 'eraser') {
+         const stage = stageRef.current;
+         const intersections = stage.getAllIntersections(pos);
+         const targetsToDelete = intersections
+            .filter(node => node.name() === 'object' && node.id() && node.id() !== lastLine.id)
+            .map(node => node.id());
+
+         if (targetsToDelete.length > 0) {
+            deleteItems(targetsToDelete);
+         }
+      }
    };
 
    const handleMouseUp = () => {
@@ -375,7 +389,6 @@ export default function InfiniteCanvas() {
                   <Line
                      key={line.id || i}
                      id={line.id || `line-${i}`}
-                     // FIX 1: eraser strokes are NOT named 'object' so Select tool ignores them
                      name={line.tool === 'eraser' ? 'eraser' : 'object'}
                      x={line.x || 0}
                      y={line.y || 0}
@@ -391,23 +404,39 @@ export default function InfiniteCanvas() {
                      globalCompositeOperation={
                         line.tool === 'eraser' ? 'destination-out' : 'source-over'
                      }
-                     draggable={tool === 'select'}
-                     listening={true}
+                     draggable={tool === 'select' && line.tool !== 'eraser'}
+                     listening={line.tool !== 'eraser'}
                      onDragStart={(e) => {
                         if (tool !== 'select') e.cancelBubble = true;
-                        dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                        saveHistory();
+                        
+                        const currentId = line.id || `line-${i}`;
+                        dragPosRef.current = { 
+                           startX: e.target.x(), 
+                           startY: e.target.y(),
+                           nodesStart: {} 
+                        };
+                        
+                        if (selectedIds.includes(currentId) && selectedIds.length > 1) {
+                           selectedIds.forEach(id => {
+                              const n = stageRef.current.findOne('#' + id);
+                              if (n) dragPosRef.current.nodesStart[id] = { x: n.x(), y: n.y() };
+                           });
+                        }
                      }}
                      onDragMove={(e) => {
-                        if (selectedIds.includes(line.id) && selectedIds.length > 1) {
-                           const dx = e.target.x() - dragPosRef.current.x;
-                           const dy = e.target.y() - dragPosRef.current.y;
-                           dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                        const currentId = line.id || `line-${i}`;
+                        if (selectedIds.includes(currentId) && selectedIds.length > 1) {
+                           const dx = e.target.x() - dragPosRef.current.startX;
+                           const dy = e.target.y() - dragPosRef.current.startY;
+                           
                            selectedIds.forEach(id => {
-                              if (id !== line.id) {
+                              if (id !== currentId) {
                                  const node = stageRef.current.findOne('#' + id);
-                                 if (node) {
-                                    node.x(node.x() + dx);
-                                    node.y(node.y() + dy);
+                                 const startPos = dragPosRef.current.nodesStart[id];
+                                 if (node && startPos) {
+                                    node.x(startPos.x + dx);
+                                    node.y(startPos.y + dy);
                                  }
                               }
                            });
@@ -428,6 +457,7 @@ export default function InfiniteCanvas() {
                            updateLine(line.id, { x: e.target.x(), y: e.target.y() });
                         }
                      }}
+                     onTransformStart={() => saveHistory()}
                      onTransformEnd={(e) => {
                         const node = e.target;
                         updateLine(line.id, {
@@ -448,7 +478,6 @@ export default function InfiniteCanvas() {
                      name="object"
                      x={t.x}
                      y={t.y}
-                     // FIX 3: hide Konva text while editing to prevent ghost duplication
                      visible={editingText?.id !== t.id}
                      text={t.text}
                      fontSize={t.fontSize}
@@ -462,19 +491,33 @@ export default function InfiniteCanvas() {
                      strokeWidth={1 / scale}
                      onDragStart={(e) => {
                         if (tool !== 'select') e.cancelBubble = true;
-                        dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                        saveHistory();
+                        
+                        dragPosRef.current = { 
+                           startX: e.target.x(), 
+                           startY: e.target.y(),
+                           nodesStart: {} 
+                        };
+                        
+                        if (selectedIds.includes(t.id) && selectedIds.length > 1) {
+                           selectedIds.forEach(id => {
+                              const n = stageRef.current.findOne('#' + id);
+                              if (n) dragPosRef.current.nodesStart[id] = { x: n.x(), y: n.y() };
+                           });
+                        }
                      }}
                      onDragMove={(e) => {
                         if (selectedIds.includes(t.id) && selectedIds.length > 1) {
-                           const dx = e.target.x() - dragPosRef.current.x;
-                           const dy = e.target.y() - dragPosRef.current.y;
-                           dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                           const dx = e.target.x() - dragPosRef.current.startX;
+                           const dy = e.target.y() - dragPosRef.current.startY;
+                           
                            selectedIds.forEach(id => {
                               if (id !== t.id) {
                                  const node = stageRef.current.findOne('#' + id);
-                                 if (node) {
-                                    node.x(node.x() + dx);
-                                    node.y(node.y() + dy);
+                                 const startPos = dragPosRef.current.nodesStart[id];
+                                 if (node && startPos) {
+                                    node.x(startPos.x + dx);
+                                    node.y(startPos.y + dy);
                                  }
                               }
                            });
@@ -511,14 +554,13 @@ export default function InfiniteCanvas() {
                         });
                      }}
                      onContextMenu={(e) => {
-                        // FIX 4: right-click on text shows font size context menu
                         e.evt.preventDefault();
                         const pos = stageRef.current.getPointerPosition();
                         setTextContextMenu({ id: t.id, x: pos.x, y: pos.y, fontSize: t.fontSize });
                         setAudioContextMenu(null);
                      }}
+                     onTransformStart={() => saveHistory()}
                      onTransform={(e) => {
-                        // Real-time resizing logic
                         const node = e.target;
                         const newWidth = Math.max(5, node.width() * node.scaleX());
                         node.setAttrs({
@@ -554,9 +596,45 @@ export default function InfiniteCanvas() {
                       draggable={tool === 'select'}
                       stroke={(selectedIds.includes(obj.id) && tool === 'select') ? '#3b82f6' : 'transparent'}
                       strokeWidth={2 / scale}
+                      onDragStart={(e) => {
+                         if (tool !== 'select') e.cancelBubble = true;
+                         saveHistory();
+                         
+                         dragPosRef.current = { 
+                            startX: e.target.x(), 
+                            startY: e.target.y(),
+                            nodesStart: {} 
+                         };
+                         
+                         if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
+                            selectedIds.forEach(id => {
+                               const n = stageRef.current.findOne('#' + id);
+                               if (n) dragPosRef.current.nodesStart[id] = { x: n.x(), y: n.y() };
+                            });
+                         }
+                      }}
+                      onDragMove={(e) => {
+                         if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
+                            const dx = e.target.x() - dragPosRef.current.startX;
+                            const dy = e.target.y() - dragPosRef.current.startY;
+                            
+                            selectedIds.forEach(id => {
+                               if (id !== obj.id) {
+                                  const node = stageRef.current.findOne('#' + id);
+                                  const startPos = dragPosRef.current.nodesStart[id];
+                                  if (node && startPos) {
+                                     node.x(startPos.x + dx);
+                                     node.y(startPos.y + dy);
+                                  }
+                               }
+                            });
+                            stageRef.current.batchDraw();
+                         }
+                      }}
                       onDragEnd={(e) => {
                          updateObject(obj.id, { x: e.target.x(), y: e.target.y() });
                       }}
+                      onTransformStart={() => saveHistory()}
                       onTransformEnd={(e) => {
                          const node = e.target;
                          updateObject(obj.id, {
@@ -569,8 +647,8 @@ export default function InfiniteCanvas() {
                    />
                 ))}
 
-                {/* Render Interactive Object Hitboxes (Video, Audio) */}
-                {objects.filter(obj => obj.type !== 'image').map((obj) => (
+                {/* Render Interactive Object Hitboxes (Video, Audio, GIF) */}
+                {objects.filter(obj => !['image'].includes(obj.type)).map((obj) => (
                    <Rect
                       key={obj.id}
                       id={obj.id}
@@ -582,35 +660,47 @@ export default function InfiniteCanvas() {
                       scaleX={obj.scaleX || 1}
                       scaleY={obj.scaleY || 1}
                       fill="transparent"
-                      stroke={['audio', 'video'].includes(obj.type) ? 'transparent' : ((selectedIds.includes(obj.id) && tool === 'select') ? '#3b82f6' : 'transparent')}
+                      stroke={['audio', 'video', 'gif'].includes(obj.type) ? 'transparent' : ((selectedIds.includes(obj.id) && tool === 'select') ? '#3b82f6' : 'transparent')}
                       strokeWidth={1 / scale}
                       draggable={tool === 'select'}
                       listening={true}
                       onDragStart={(e) => {
                          if (tool !== 'select') e.cancelBubble = true;
-                         dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                         saveHistory();
+                         
+                         dragPosRef.current = { 
+                            startX: e.target.x(), 
+                            startY: e.target.y(),
+                            nodesStart: {} 
+                         };
+                         
+                         if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
+                            selectedIds.forEach(id => {
+                               const n = stageRef.current.findOne('#' + id);
+                               if (n) dragPosRef.current.nodesStart[id] = { x: n.x(), y: n.y() };
+                            });
+                         }
                       }}
                       onDragMove={(e) => {
-                         // For audio/video: throttle store updates via RAF so HTML overlay follows smoothly
-                         if (obj.type === 'audio' || obj.type === 'video') {
+                         if (['audio', 'video', 'gif'].includes(obj.type)) {
                             const nx = e.target.x();
                             const ny = e.target.y();
                             if (audioRafRef.current) cancelAnimationFrame(audioRafRef.current);
                             audioRafRef.current = requestAnimationFrame(() => {
                                updateObject(obj.id, { x: nx, y: ny });
                             });
-                            return;
                          }
                          if (selectedIds.includes(obj.id) && selectedIds.length > 1) {
-                            const dx = e.target.x() - dragPosRef.current.x;
-                            const dy = e.target.y() - dragPosRef.current.y;
-                            dragPosRef.current = { x: e.target.x(), y: e.target.y() };
+                            const dx = e.target.x() - dragPosRef.current.startX;
+                            const dy = e.target.y() - dragPosRef.current.startY;
+                            
                             selectedIds.forEach(id => {
                                if (id !== obj.id) {
                                   const node = stageRef.current.findOne('#' + id);
-                                  if (node) {
-                                     node.x(node.x() + dx);
-                                     node.y(node.y() + dy);
+                                  const startPos = dragPosRef.current.nodesStart[id];
+                                  if (node && startPos) {
+                                     node.x(startPos.x + dx);
+                                     node.y(startPos.y + dy);
                                   }
                                }
                             });
@@ -631,6 +721,7 @@ export default function InfiniteCanvas() {
                             updateObject(obj.id, { x: e.target.x(), y: e.target.y() });
                          }
                       }}
+                      onTransformStart={() => saveHistory()}
                       onTransformEnd={(e) => {
                          const node = e.target;
                          updateObject(obj.id, {
@@ -768,6 +859,27 @@ export default function InfiniteCanvas() {
                      x={(obj.x * scale) + position.x}
                      y={(obj.y * scale) + position.y}
                      width={obj.width * (obj.scaleX || 1)}
+                     scale={scale}
+                     color={obj.color || '#ffffff'}
+                     isSelected={selectedIds.includes(obj.id)}
+                     onContextMenu={(screenX, screenY) => {
+                        setAudioContextMenu({ id: obj.id, x: screenX, y: screenY, color: obj.color || '#ffffff' });
+                        setTextContextMenu(null);
+                     }}
+                  />
+               );
+            }
+            if (obj.type === 'gif') {
+               return (
+                  <GifPlayerWidget 
+                     key={obj.id}
+                     id={obj.id}
+                     url={obj.url}
+                     fileName={obj.name}
+                     x={(obj.x * scale) + position.x}
+                     y={(obj.y * scale) + position.y}
+                     width={obj.width * (obj.scaleX || 1)}
+                     height={obj.height * (obj.scaleY || 1)}
                      scale={scale}
                      color={obj.color || '#ffffff'}
                      isSelected={selectedIds.includes(obj.id)}

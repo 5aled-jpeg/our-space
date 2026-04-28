@@ -2,6 +2,7 @@ import { BrowserWindow, app, ipcMain } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 //#region electron/main.js
+app.disableHardwareAcceleration();
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 function createWindow() {
 	const mainWindow = new BrowserWindow({

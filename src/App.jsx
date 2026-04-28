@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Pen, Eraser, Type, MousePointer2, Settings, Download, Trash2, Moon, Sun, Heart, X, RotateCcw, Hand, Upload, Undo2, Redo2 } from 'lucide-react';
+import { Pen, Eraser, Type, MousePointer2, Settings, Download, Trash2, Moon, Sun, Heart, X, RotateCcw, Hand, Upload, Undo2, Redo2, Coffee, Zap } from 'lucide-react';
 import { useStore } from './store';
 import InfiniteCanvas from './components/InfiniteCanvas';
 
@@ -64,47 +64,53 @@ export default function App() {
     reader.readAsText(file);
     e.target.value = null; // reset
   };
-  const handleFileImport = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  const processFiles = (files) => {
+    if (!files || files.length === 0) return;
     
     const { position, scale, addObject, color } = useStore.getState();
-    const url = URL.createObjectURL(file);
-    const id = Date.now().toString();
+    
+    Array.from(files).forEach(file => {
+      const url = URL.createObjectURL(file);
+      const id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
 
-    const isAudio = file.type.startsWith('audio/') || ['.mp3', '.wav', '.m4a', '.ogg', '.aac', '.flac'].some(ext => file.name.toLowerCase().endsWith(ext));
-    const isVideo = file.type.startsWith('video/') || ['.mp4', '.webm', '.mov', '.ogg'].some(ext => file.name.toLowerCase().endsWith(ext));
-    const isImage = file.type.startsWith('image/');
+      const isAudio = file.type.startsWith('audio/') || ['.mp3', '.wav', '.m4a', '.ogg', '.aac', '.flac'].some(ext => file.name.toLowerCase().endsWith(ext));
+      const isVideo = file.type.startsWith('video/') || ['.mp4', '.webm', '.mov', '.ogg'].some(ext => file.name.toLowerCase().endsWith(ext));
+      const isImage = file.type.startsWith('image/') || file.name.toLowerCase().endsWith('.gif');
+      const isGif = file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif');
 
-    if (isAudio) {
-      addObject({
-        id, type: 'audio', url, name: file.name, color,
-        x: -position.x / scale + 100,
-        y: -position.y / scale + 100,
-        width: 320, height: 80, scaleX: 1, scaleY: 1
-      });
-    } else if (isVideo) {
-      addObject({
-        id, type: 'video', url, name: file.name, color,
-        x: -position.x / scale + 100,
-        y: -position.y / scale + 100,
-        width: 480, height: 320, scaleX: 1, scaleY: 1
-      });
-    } else if (isImage) {
-      // For images, we try to get dimensions first
-      const img = new Image();
-      img.onload = () => {
+      if (isAudio) {
         addObject({
-          id, type: 'image', url, name: file.name,
+          id, type: 'audio', url, name: file.name, color,
           x: -position.x / scale + 100,
           y: -position.y / scale + 100,
-          width: img.width,
-          height: img.height,
-          scaleX: 1, scaleY: 1
+          width: 320, height: 80, scaleX: 1, scaleY: 1
         });
-      };
-      img.src = url;
-    }
+      } else if (isVideo) {
+        addObject({
+          id, type: 'video', url, name: file.name, color,
+          x: -position.x / scale + 100,
+          y: -position.y / scale + 100,
+          width: 480, height: 320, scaleX: 1, scaleY: 1
+        });
+      } else if (isImage) {
+        const img = new Image();
+        img.onload = () => {
+          addObject({
+            id, type: isGif ? 'gif' : 'image', url, name: file.name,
+            x: -position.x / scale + 100,
+            y: -position.y / scale + 100,
+            width: img.width,
+            height: img.height,
+            scaleX: 1, scaleY: 1
+          });
+        };
+        img.src = url;
+      }
+    });
+  };
+
+  const handleFileImport = (e) => {
+    processFiles(e.target.files);
     e.target.value = null;
   };
 
@@ -166,45 +172,13 @@ export default function App() {
     const handlePaste = async (e) => {
       const items = e.clipboardData?.items;
       if (!items) return;
-
+      const files = [];
       for (const item of items) {
         if (item.kind === 'file') {
-          const file = item.getAsFile();
-          if (!file) continue;
-          
-          const { position, scale, addObject, color } = useStore.getState();
-          const url = URL.createObjectURL(file);
-          const id = Date.now().toString();
-
-          if (file.type.startsWith('image/')) {
-            const img = new Image();
-            img.onload = () => {
-              addObject({
-                id, type: 'image', url, name: file.name || 'Pasted Image',
-                x: -position.x / scale + 100,
-                y: -position.y / scale + 100,
-                width: img.width, height: img.height,
-                scaleX: 1, scaleY: 1
-              });
-            };
-            img.src = url;
-          } else if (file.type.startsWith('video/')) {
-            addObject({
-              id, type: 'video', url, name: file.name || 'Pasted Video', color,
-              x: -position.x / scale + 100,
-              y: -position.y / scale + 100,
-              width: 480, height: 320, scaleX: 1, scaleY: 1
-            });
-          } else if (file.type.startsWith('audio/')) {
-            addObject({
-              id, type: 'audio', url, name: file.name || 'Pasted Audio', color,
-              x: -position.x / scale + 100,
-              y: -position.y / scale + 100,
-              width: 320, height: 80, scaleX: 1, scaleY: 1
-            });
-          }
+          files.push(item.getAsFile());
         }
       }
+      processFiles(files);
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -216,7 +190,21 @@ export default function App() {
   }, [setTool, lines, texts, objects, position, scale, theme]);
 
   return (
-    <div className="flex flex-col h-screen w-screen relative overflow-hidden select-none" style={{ backgroundColor: colors.bg }}>
+    <div 
+      className="flex flex-col h-screen w-screen relative overflow-hidden select-none" 
+      style={{ backgroundColor: colors.bg }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer.files) {
+          processFiles(e.dataTransfer.files);
+        }
+      }}
+    >
       {/* 1. Custom Top Bar */}
       <div className="h-10 w-full flex items-center justify-between px-6 z-50 fixed top-0" style={{ WebkitAppRegion: 'drag' }}>
         <div className="flex items-center gap-2">
@@ -265,10 +253,12 @@ export default function App() {
             <div className="space-y-6">
                <div>
                   <label className="text-[10px] uppercase tracking-wider opacity-40 mb-3 block">Theme</label>
-                  <div className="flex gap-3">
+                  <div className="flex flex-wrap gap-3">
                     <ThemeBtn active={theme === 'light'} icon={<Sun size={18}/>} onClick={() => setTheme('light')} label="Light" />
                     <ThemeBtn active={theme === 'dark'} icon={<Moon size={18}/>} onClick={() => setTheme('dark')} label="Dark" />
                     <ThemeBtn active={theme === 'pink'} icon={<Heart size={18}/>} onClick={() => setTheme('pink')} label="Pink" />
+                    <ThemeBtn active={theme === 'cream'} icon={<Coffee size={18}/>} onClick={() => setTheme('cream')} label="Cream" />
+                    <ThemeBtn active={theme === 'cyber'} icon={<Zap size={18}/>} onClick={() => setTheme('cyber')} label="Cyber" />
                   </div>
                </div>
                
@@ -479,7 +469,7 @@ export default function App() {
           
           <div className="w-[1px] h-8 mx-1 opacity-20" style={{ backgroundColor: colors.icon }} />
           
-          <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,video/*,image/*,.mp3,.wav,.m4a,.mp4,.webm,.mov" onChange={handleFileImport} />
+          <input type="file" ref={fileInputRef} className="hidden" accept="audio/*,video/*,image/*,.mp3,.wav,.m4a,.mp4,.webm,.mov,.gif" onChange={handleFileImport} />
           <DockItem 
             icon={<Upload size={20} />} 
             onClick={() => {

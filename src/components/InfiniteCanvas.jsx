@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { Stage, Layer, Line, Text, Rect, Transformer, Image } from 'react-konva';
+import { Html } from 'react-konva-utils';
 import { useStore } from '../store';
 import AudioPlayerWidget from './AudioPlayerWidget';
 import VideoPlayerWidget from './VideoPlayerWidget';
@@ -15,6 +16,46 @@ const KonvaImage = ({ url, ...props }) => {
    return img ? <Image image={img} {...props} /> : null;
 };
 
+const stripMarkdown = (text) => {
+   if (!text) return '';
+   return text
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\*(.*?)\*/g, '$1')
+      .replace(/__(.*?)__/g, '$1')
+      .replace(/\|\|(.*?)\|\|/g, '$1')
+      .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+      .replace(/^> (.*$)/gm, '$1');
+};
+
+const renderMarkdown = (text, color, textId, revealedSet) => {
+   if (!text) return '';
+   // 1. Sanitize input to prevent XSS but allow our own tags later
+   let res = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+   
+   // 2. Formatting
+   res = res.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+   res = res.replace(/\*(.*?)\*/g, '<em>$1</em>');
+   res = res.replace(/__(.*?)__/g, '<u style="text-decoration-color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px;">$1</u>');
+   
+   // 3. Spoilers (Persistent Reveal Logic)
+   res = res.replace(/\|\|(.*?)\|\|/g, (match, p1) => {
+      const isRevealed = revealedSet?.has(textId + '-' + p1);
+      const safeContent = p1.replace(/'/g, "\\'");
+      return '<span class="spoiler-wrapper ' + (isRevealed ? 'revealed' : 'hidden') + '" ' +
+             'onclick="this.classList.remove(\'hidden\'); this.classList.add(\'revealed\'); window.onRevealSpoiler && window.onRevealSpoiler(\'' + textId + '\', \'' + safeContent + '\')" ' +
+             'oncontextmenu="event.preventDefault(); event.stopPropagation(); window.onTextContextMenu && window.onTextContextMenu(\'' + textId + '\', event.clientX, event.clientY, 20)">' +
+             '<span class="spoiler-text">' + p1 + '</span>' +
+             '</span>';
+   });
+   
+   // 4. Links & Quotes
+   res = res.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" oncontextmenu="event.preventDefault(); event.stopPropagation(); window.onTextContextMenu && window.onTextContextMenu(\''+textId+'\', event.clientX, event.clientY, 20)" style="color: #3b82f6; text-decoration: underline; pointer-events: auto;">$1</a>');
+   res = res.replace(/^&gt; (.*$)/gm, '<div style="border-left: 3px solid ' + color + '; padding-left: 8px; margin-left: 2px; opacity: 0.8">$1</div>');
+   res = res.replace(/\n/g, '<br/>');
+   
+   return res;
+};
+
 export default function InfiniteCanvas() {
    const {
       lines, addLine, updateLastLine, updateLine,
@@ -24,7 +65,8 @@ export default function InfiniteCanvas() {
       undo, redo, saveHistory,
       tool, color, brushSize, eraserSize,
       fontSize, fontFamily,
-      position, updatePosition, scale, updateScale
+      position, updatePosition, scale, updateScale,
+      broadcast, remoteCursors, socket, roomId
    } = useStore();
 
    const stageRef = useRef(null);
@@ -42,14 +84,25 @@ export default function InfiniteCanvas() {
    // Context menus
    const [textContextMenu, setTextContextMenu] = useState(null); // { id, x, y, fontSize }
    const [audioContextMenu, setAudioContextMenu] = useState(null); // { id, x, y, color }
+   const [richTextContextMenu, setRichTextContextMenu] = useState(null); // { x, y, start, end }
+   const [revealedSpoilers, setRevealedSpoilers] = useState(new Set()); // Set of textId-spoilerContent
+
+   const revealSpoiler = (textId, content) => {
+      setRevealedSpoilers(prev => {
+         const next = new Set(prev);
+         next.add(`${textId}-${content}`);
+         return next;
+      });
+   };
 
    // Auto-grow textarea height
    useEffect(() => {
       if (editingText && textAreaRef.current) {
          textAreaRef.current.style.height = 'auto';
-         textAreaRef.current.style.height = textAreaRef.current.scrollHeight + 'px';
+         // Using a small buffer and scrollHeight ensures we hug the text precisely
+         textAreaRef.current.style.height = (textAreaRef.current.scrollHeight) + 'px';
       }
-   }, [editingText]);
+   }, [editingText?.value, editingText?.width, scale]);
 
    // Sync Transformer nodes
    useEffect(() => {
@@ -92,6 +145,18 @@ export default function InfiniteCanvas() {
       return () => window.removeEventListener('keydown', handleKeyDown);
    }, [selectedIds, editingText, deleteItems, undo, redo]);
 
+   useEffect(() => {
+      window.onRevealSpoiler = (id, content) => revealSpoiler(id, content);
+      window.onTextContextMenu = (id, x, y, fontSize) => {
+         setTextContextMenu({ id, x, y, fontSize });
+         setAudioContextMenu(null);
+      };
+      return () => { 
+         delete window.onRevealSpoiler; 
+         delete window.onTextContextMenu;
+      };
+   }, []);
+
    // 1. Zoom Logic
    const handleWheel = (e) => {
       e.evt.preventDefault();
@@ -123,6 +188,9 @@ export default function InfiniteCanvas() {
 
       // Selection Logic for Select Tool
       if (tool === 'select') {
+         if (editingText) {
+            handleTextSubmit();
+         }
          const pos = stageRef.current.getPointerPosition();
          const stageX = (pos.x - position.x) / scale;
          const stageY = (pos.y - position.y) / scale;
@@ -180,14 +248,14 @@ export default function InfiniteCanvas() {
 
          // Clicked on existing text?
          if (e.target && e.target.className === 'Text') {
-            const t = e.target.attrs;
+            const originalText = texts.find(txt => txt.id === t.id)?.text || t.text;
             setEditingText({
                id: t.id,
                x: (t.x * scale) + position.x,
                y: (t.y * scale) + position.y,
                stageX: t.x,
                stageY: t.y,
-               value: t.text,
+               value: originalText,
                width: t.width,
                isNew: false
             });
@@ -221,6 +289,7 @@ export default function InfiniteCanvas() {
       const pos = stageRef.current.getPointerPosition();
       const stageX = (pos.x - position.x) / scale;
       const stageY = (pos.y - position.y) / scale;
+      if (socket && roomId) broadcast('CURSOR_MOVE', { pos: { x: stageX, y: stageY } });
 
       if (selectionBox && selectionBox.visible) {
          setSelectionBox({
@@ -472,20 +541,39 @@ export default function InfiniteCanvas() {
 
                {/* Render Texts */}
                {texts.map((t) => (
+                  <React.Fragment key={t.id}>
+                  {editingText?.id !== t.id && (
+                     <Html
+                        groupProps={{ x: t.x, y: t.y }}
+                        divProps={{ style: { pointerEvents: 'none' } }}
+                     >
+                        <div
+                           style={{
+                              width: t.width,
+                              fontSize: t.fontSize,
+                              fontFamily: t.fontFamily,
+                              color: t.fill,
+                              lineHeight: 1.2,
+                              whiteSpace: 'pre-wrap',
+                              wordWrap: 'break-word',
+                           }}
+                           dangerouslySetInnerHTML={{ __html: renderMarkdown(t.text, t.fill, t.id, revealedSpoilers) }}
+                        />
+                     </Html>
+                  )}
                   <Text
-                     key={t.id}
                      id={t.id}
                      name="object"
                      x={t.x}
                      y={t.y}
                      visible={editingText?.id !== t.id}
-                     text={t.text}
+                     text={stripMarkdown(t.text)}
                      fontSize={t.fontSize}
                      fontFamily={t.fontFamily}
-                     fill={t.fill}
+                     fill="transparent"
                      width={t.width}
                      wrap="word"
-                     draggable={tool === 'select'}
+                     draggable={tool === 'select' && editingText?.id !== t.id}
                      listening={true}
                      stroke={(selectedIds.includes(t.id) && tool === 'select') ? '#3b82f6' : 'transparent'}
                      strokeWidth={1 / scale}
@@ -541,13 +629,14 @@ export default function InfiniteCanvas() {
                      onDblClick={(e) => {
                         const node = e.target;
                         const attrs = node.attrs;
+                        const raw = texts.find(txt => txt.id === attrs.id)?.text || attrs.text;
                         setEditingText({
                            id: attrs.id,
                            x: (attrs.x * scale) + position.x,
                            y: (attrs.y * scale) + position.y,
                            stageX: attrs.x,
                            stageY: attrs.y,
-                           value: attrs.text,
+                           value: raw,
                            width: attrs.width,
                            fontSize: attrs.fontSize,
                            isNew: false
@@ -578,6 +667,7 @@ export default function InfiniteCanvas() {
                         });
                      }}
                   />
+                  </React.Fragment>
                ))}
 
                 {/* Render Static Objects (Images) */}
@@ -785,22 +875,88 @@ export default function InfiniteCanvas() {
                      fill="transparent"
                   />
                )}
+
+               {/* Render Remote Cursors */}
+               {Object.entries(remoteCursors).map(([id, pos]) => (
+                  <React.Fragment key={`cursor-${id}`}>
+                     <Line
+                        points={[0, 0, 10, 10, 5, 10, 5, 15, 2, 15, 2, 10, 0, 10]}
+                        x={pos.x}
+                        y={pos.y}
+                        fill="#3b82f6"
+                        closed
+                        scaleX={1.5 / scale}
+                        scaleY={1.5 / scale}
+                        listening={false}
+                     />
+                     <Text 
+                        text={`User ${id.slice(0, 4)}`}
+                        x={pos.x + 15 / scale}
+                        y={pos.y + 15 / scale}
+                        fontSize={10 / scale}
+                        fill="#3b82f6"
+                        fontFamily="monospace"
+                        fontStyle="bold"
+                        listening={false}
+                     />
+                  </React.Fragment>
+               ))}
             </Layer>
          </Stage>
 
          {/* Text Editing Overlay */}
-         {editingText && (
+         {editingText && (() => {
+            const applyRichFormat = (prefix, suffix = prefix) => {
+               const ta = textAreaRef.current;
+               if (!ta) return;
+               const start = ta.selectionStart;
+               const end = ta.selectionEnd;
+               const val = editingText.value;
+               if (start === end && !prefix.includes('>')) return;
+               
+               const newVal = val.substring(0, start) + prefix + val.substring(start, end) + suffix + val.substring(end);
+               setEditingText({ ...editingText, value: newVal });
+               
+               setTimeout(() => {
+                  if (textAreaRef.current) {
+                     textAreaRef.current.focus();
+                     textAreaRef.current.setSelectionRange(start + prefix.length, end + prefix.length);
+                  }
+               }, 0);
+               setRichTextContextMenu(null);
+            };
+
+            return (
+              <>
             <textarea
                ref={textAreaRef}
                autoFocus
+               rows={1}
                value={editingText.value}
                onChange={(e) => setEditingText({ ...editingText, value: e.target.value })}
-               onBlur={handleTextSubmit}
+               onBlur={(e) => {
+                  if (richTextContextMenu) return;
+                  handleTextSubmit(e);
+               }}
                onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                      e.preventDefault();
                      handleTextSubmit();
+                     return;
                   }
+                  if (e.ctrlKey || e.metaKey) {
+                     if (e.key.toLowerCase() === 'b') { e.preventDefault(); applyRichFormat('**'); }
+                     if (e.key.toLowerCase() === 'i') { e.preventDefault(); applyRichFormat('*'); }
+                     if (e.key.toLowerCase() === 'u') { e.preventDefault(); applyRichFormat('__'); }
+                  }
+               }}
+               onContextMenu={(e) => {
+                  e.preventDefault();
+                  setRichTextContextMenu({
+                     x: e.clientX,
+                     y: e.clientY,
+                     applyFormat: applyRichFormat
+                  });
                }}
                placeholder=""
                style={{
@@ -815,17 +971,80 @@ export default function InfiniteCanvas() {
                   borderRadius: '3px',
                   outline: 'none',
                   resize: 'none',
-                  padding: '',
+                  boxSizing: 'border-box',
+                  padding: 0,
                   margin: 0,
+                  lineHeight: 1.2,
                   whiteSpace: 'pre-wrap',
                   overflow: 'hidden',
-                  width: editingText.width * scale,
+                  width: Math.ceil(editingText.width * scale),
                   minWidth: '100px',
                   zIndex: 1000,
                   pointerEvents: 'auto'
                }}
             />
-         )}
+            {richTextContextMenu && (
+               <div 
+                  className="fixed z-[2000] border border-white/10 rounded-[1.5rem] shadow-2xl overflow-hidden flex flex-col text-[10px] text-white/80 font-bold uppercase tracking-widest"
+                  style={{ 
+                     left: richTextContextMenu.x, 
+                     top: richTextContextMenu.y, 
+                     minWidth: 160,
+                     backgroundColor: 'rgba(20,20,20,0.6)',
+                     backdropFilter: 'blur(30px)',
+                     boxShadow: '0 10px 40px rgba(0,0,0,0.5)'
+                  }}
+                  onMouseDown={(e) => e.preventDefault()}
+               >
+                  <button className="px-4 py-2 hover:bg-white/10 text-left transition-colors flex justify-between" onClick={() => richTextContextMenu.applyFormat('**')}>
+                     <span>Bold</span><span className="opacity-40">Ctrl+B</span>
+                  </button>
+                  <button className="px-4 py-2 hover:bg-white/10 text-left transition-colors flex justify-between" onClick={() => richTextContextMenu.applyFormat('*')}>
+                     <span>Italic</span><span className="opacity-40">Ctrl+I</span>
+                  </button>
+                  <button className="px-4 py-2 hover:bg-white/10 text-left transition-colors flex justify-between" onClick={() => richTextContextMenu.applyFormat('__')}>
+                     <span>Underline</span><span className="opacity-40">Ctrl+U</span>
+                  </button>
+                  <div className="h-[1px] bg-white/10 my-1" />
+                  <button className="px-4 py-2 hover:bg-white/10 text-left transition-colors" onClick={() => richTextContextMenu.applyFormat('> ', '')}>
+                     Quote Block
+                  </button>
+                  <button className="px-4 py-2 hover:bg-white/10 text-left transition-colors" onClick={() => richTextContextMenu.applyFormat('||')}>
+                     Spoiler
+                  </button>
+                  {!richTextContextMenu.isLinkMode ? (
+                     <button className="px-4 py-2 hover:bg-white/10 text-left transition-colors" onClick={() => {
+                        setRichTextContextMenu({ ...richTextContextMenu, isLinkMode: true });
+                     }}>
+                        Create Link
+                     </button>
+                  ) : (
+                     <div className="p-3 flex flex-col gap-2 bg-white/5">
+                        <input 
+                           autoFocus
+                           placeholder="Paste URL and press Enter"
+                           className="bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-[11px] text-white outline-none focus:border-blue-500/50 transition-colors w-full"
+                           onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                 const url = e.target.value;
+                                 if (url) {
+                                    const formattedUrl = (url.startsWith('http://') || url.startsWith('https://')) ? url : `https://${url}`;
+                                    richTextContextMenu.applyFormat('[', `](${formattedUrl})`);
+                                 } else {
+                                    setRichTextContextMenu(null);
+                                 }
+                              }
+                              if (e.key === 'Escape') setRichTextContextMenu(null);
+                           }}
+                        />
+                        <div className="text-[8px] opacity-40 text-center uppercase tracking-widest">Enter to confirm • Esc to cancel</div>
+                     </div>
+                  )}
+               </div>
+            )}
+            </>
+            );
+         })()}
 
          {/* Widget Overlays (Audio, Video) */}
          {objects && objects.map((obj) => {
@@ -896,44 +1115,57 @@ export default function InfiniteCanvas() {
          {textContextMenu && (
             <div
                onMouseLeave={() => setTextContextMenu(null)}
+               className="fixed z-[2000] border border-white/10 rounded-[1.5rem] shadow-2xl p-4 flex flex-col gap-4 text-white/90"
                style={{
-                  position: 'fixed',
                   left: textContextMenu.x,
                   top: textContextMenu.y,
-                  zIndex: 2000,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  backdropFilter: 'blur(20px)',
-                  backgroundColor: 'rgba(20,20,20,0.85)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  borderRadius: 16,
-                  padding: '8px 14px',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-                  color: '#fff',
-                  fontSize: 13,
+                  backgroundColor: 'rgba(20,20,20,0.6)',
+                  backdropFilter: 'blur(30px)',
+                  minWidth: 180,
                   pointerEvents: 'auto',
-                  userSelect: 'none'
                }}
             >
-               <span style={{ opacity: 0.6, fontSize: 11, marginRight: 4 }}>Font Size</span>
-               <button
-                  onClick={() => {
-                     const newSize = Math.max(8, textContextMenu.fontSize - 4);
-                     updateText(textContextMenu.id, { fontSize: newSize });
-                     setTextContextMenu({ ...textContextMenu, fontSize: newSize });
-                  }}
-                  style={{ cursor: 'pointer', fontSize: 18, lineHeight: 1, background: 'none', border: 'none', color: '#fff', padding: '0 4px' }}
-               >−</button>
-               <span style={{ minWidth: 28, textAlign: 'center', fontWeight: 600 }}>{textContextMenu.fontSize}</span>
-               <button
-                  onClick={() => {
-                     const newSize = Math.min(200, textContextMenu.fontSize + 4);
-                     updateText(textContextMenu.id, { fontSize: newSize });
-                     setTextContextMenu({ ...textContextMenu, fontSize: newSize });
-                  }}
-                  style={{ cursor: 'pointer', fontSize: 18, lineHeight: 1, background: 'none', border: 'none', color: '#fff', padding: '0 4px' }}
-               >+</button>
+               <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-bold uppercase tracking-widest opacity-40">Font Size</span>
+                  <div className="flex items-center gap-3">
+                     <button
+                        onClick={() => {
+                           const newSize = Math.max(8, textContextMenu.fontSize - 4);
+                           updateText(textContextMenu.id, { fontSize: newSize });
+                           setTextContextMenu({ ...textContextMenu, fontSize: newSize });
+                        }}
+                        className="w-6 h-6 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-center transition-colors"
+                     >−</button>
+                     <span className="text-xs font-mono font-bold w-6 text-center">{textContextMenu.fontSize}</span>
+                     <button
+                        onClick={() => {
+                           const newSize = Math.min(200, textContextMenu.fontSize + 4);
+                           updateText(textContextMenu.id, { fontSize: newSize });
+                           setTextContextMenu({ ...textContextMenu, fontSize: newSize });
+                        }}
+                        className="w-6 h-6 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 flex items-center justify-center transition-colors"
+                     >+</button>
+                  </div>
+               </div>
+
+               <div className="h-[1px] bg-white/5" />
+
+               <div className="space-y-2">
+                  <span className="text-[9px] font-bold uppercase tracking-widest opacity-40 block">Text Color</span>
+                  <div className="grid grid-cols-6 gap-1.5">
+                     {['#ffffff', '#000000', '#ff595e', '#ffca3a', '#8ac926', '#1982c4', '#6a4c93', '#ff924c', '#ff70a6', '#70d6ff', '#5f0f40', '#9a031e'].map(c => (
+                        <button 
+                           key={c}
+                           onClick={() => {
+                              updateText(textContextMenu.id, { fill: c });
+                              setTextContextMenu(null);
+                           }}
+                           className="w-5 h-5 rounded-full border border-white/20 transition-transform hover:scale-125"
+                           style={{ backgroundColor: c }}
+                        />
+                     ))}
+                  </div>
+               </div>
             </div>
          )}
 

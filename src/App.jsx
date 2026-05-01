@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Pen, Eraser, Type, MousePointer2, Settings, Download, Trash2, Moon, Sun, Heart, X, RotateCcw, Hand, Upload, Undo2, Redo2, Coffee, Zap } from 'lucide-react';
+import { Pen, Eraser, Type, MousePointer2, Settings, Download, Trash2, Moon, Sun, Heart, X, RotateCcw, Hand, Upload, Undo2, Redo2, Coffee, Zap, Users, Link, Grid3x3, AlignJustify, GripHorizontal, Square } from 'lucide-react';
 import { useStore } from './store';
 import InfiniteCanvas from './components/InfiniteCanvas';
 
@@ -16,14 +16,36 @@ export default function App() {
     clearLines,
     undo, redo, canUndo, canRedo,
     loadSession,
-    lines, texts, objects, position, scale,
-    getThemeColors 
+    lines, texts, objects, position, scale, updatePosition, updateScale,
+    getThemeColors,
+    socket, roomId, setRoomId, initializeSocket,
+    canvasStyle, setCanvasStyle
   } = useStore();
   
   const colors = getThemeColors();
   const [showSettings, setShowSettings] = useState(false);
+  const [showCollab, setShowCollab] = useState(false);
+  const [joinId, setJoinId] = useState('');
   const [showBrushMenu, setShowBrushMenu] = useState(false);
   const [brushMenuPos, setBrushMenuPos] = useState({ x: 0, y: 0 });
+
+  const handleCreateRoom = () => {
+    const s = socket || initializeSocket();
+    s.emit('create-room');
+    s.on('room-created', (id) => {
+      setRoomId(id);
+    });
+  };
+
+  const handleJoinRoom = () => {
+    if (!joinId) return;
+    const s = socket || initializeSocket();
+    s.emit('join-room', joinId);
+    s.on('joined-successfully', (id) => {
+      setRoomId(id);
+    });
+    s.on('error', (msg) => alert(msg));
+  };
 
   const fileInputRef = useRef(null);
   const sessionInputRef = useRef(null);
@@ -192,7 +214,20 @@ export default function App() {
   return (
     <div 
       className="flex flex-col h-screen w-screen relative overflow-hidden select-none" 
-      style={{ backgroundColor: colors.bg }}
+      style={{ 
+        backgroundColor: colors.bg,
+        backgroundImage: canvasStyle === 'grid' 
+          ? `linear-gradient(to right, ${colors.text}10 1px, transparent 1px), linear-gradient(to bottom, ${colors.text}10 1px, transparent 1px)`
+          : canvasStyle === 'lines'
+          ? `linear-gradient(to bottom, ${colors.text}15 1px, transparent 1px)`
+          : canvasStyle === 'dots'
+          ? `radial-gradient(${colors.text}20 1.5px, transparent 1.5px)`
+          : 'none',
+        backgroundSize: canvasStyle === 'dots' 
+          ? `${scale * 40}px ${scale * 40}px` 
+          : `${scale * 50}px ${scale * 50}px`,
+        backgroundPosition: `${position.x}px ${position.y}px`
+      }}
       onDragOver={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -224,20 +259,16 @@ export default function App() {
       {/* 2. THE CANVAS */}
       <InfiniteCanvas />
 
-      {/* DEBUG OVERLAY */}
-      <div className="fixed top-14 right-8 bg-black/80 text-white font-mono text-xs p-4 rounded-lg z-[9999] opacity-50 pointer-events-none">
-         Debug:<br/>
-         Objects Array: {useStore().objects?.length || 0}<br/>
-      </div>
 
-      {/* 3. SETTINGS MODAL */}
+
+      {/* 3. COLLABORATION MODAL */}
       <AnimatePresence>
-        {showSettings && (
+        {showCollab && (
           <motion.div 
             initial={{ opacity: 0, scale: 0.9, x: 20 }}
             animate={{ opacity: 1, scale: 1, x: 0 }}
             exit={{ opacity: 0, scale: 0.9, x: 20 }}
-            className="fixed top-16 right-8 w-64 z-[100] p-6 rounded-[2rem] shadow-2xl border"
+            className="fixed top-16 right-8 w-80 rounded-3xl p-6 z-[1000] border shadow-2xl"
             style={{ 
               backgroundColor: colors.panel, 
               backdropFilter: 'blur(40px)', 
@@ -246,46 +277,142 @@ export default function App() {
             }}
           >
             <div className="flex justify-between items-center mb-6">
-              <span className="font-bold text-sm tracking-widest uppercase opacity-60">Settings</span>
-              <button onClick={() => setShowSettings(false)} className="opacity-40 hover:opacity-100"><X size={18} /></button>
+              <span className="font-bold text-sm tracking-widest uppercase opacity-60">Collaboration</span>
+              <button onClick={() => setShowCollab(false)} className="opacity-40 hover:opacity-100"><X size={18} /></button>
             </div>
-            
+
             <div className="space-y-6">
-               <div>
-                  <label className="text-[10px] uppercase tracking-wider opacity-40 mb-3 block">Theme</label>
-                  <div className="flex flex-wrap gap-3">
-                    <ThemeBtn active={theme === 'light'} icon={<Sun size={18}/>} onClick={() => setTheme('light')} label="Light" />
-                    <ThemeBtn active={theme === 'dark'} icon={<Moon size={18}/>} onClick={() => setTheme('dark')} label="Dark" />
-                    <ThemeBtn active={theme === 'pink'} icon={<Heart size={18}/>} onClick={() => setTheme('pink')} label="Pink" />
-                    <ThemeBtn active={theme === 'cream'} icon={<Coffee size={18}/>} onClick={() => setTheme('cream')} label="Cream" />
-                    <ThemeBtn active={theme === 'cyber'} icon={<Zap size={18}/>} onClick={() => setTheme('cyber')} label="Cyber" />
-                  </div>
-               </div>
-               
-               <div className="pt-4 border-t border-white/10 space-y-3">
-                  <label className="text-[10px] uppercase tracking-wider opacity-40 mb-1 block">Session</label>
-                  <input type="file" ref={sessionInputRef} className="hidden" accept=".vision" onChange={handleSessionImport} />
-                  
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={exportSession}
-                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-[11px] font-bold"
-                    >
-                      <Download size={14} /> Export
-                    </button>
-                    <button 
-                      onClick={() => sessionInputRef.current?.click()}
-                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-[11px] font-bold"
-                    >
-                      <Upload size={14} /> Import
-                    </button>
+              {!roomId ? (
+                <>
+                  <button 
+                    onClick={handleCreateRoom}
+                    className="w-full flex items-center justify-center gap-3 py-4 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/10 transition-all group"
+                  >
+                    <Users size={20} className="group-hover:scale-110 transition-transform" />
+                    <span className="font-bold text-xs uppercase tracking-wider">Create Live Room</span>
+                  </button>
+
+                  <div className="relative flex items-center gap-2">
+                    <div className="flex-1 h-[1px] bg-white/10" />
+                    <span className="text-[10px] uppercase opacity-30 font-bold">OR JOIN</span>
+                    <div className="flex-1 h-[1px] bg-white/10" />
                   </div>
 
-                  <button onClick={() => { if(window.confirm("Clear all?")) { clearLines(); setShowSettings(false); } }} className="w-full flex items-center justify-between p-3 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors mt-2">
-                    <span className="text-xs font-bold">Clear Workspace</span>
-                    <Trash2 size={16} />
-                  </button>
-               </div>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text"
+                      placeholder="Room ID..."
+                      value={joinId}
+                      onChange={(e) => setJoinId(e.target.value)}
+                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-xs focus:outline-none focus:border-white/30"
+                    />
+                    <button 
+                      onClick={handleJoinRoom}
+                      className="p-2 bg-white/10 rounded-xl hover:bg-white/20 transition-colors"
+                    >
+                      <Link size={18} />
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-4">
+                   <div className="p-4 rounded-2xl bg-green-500/10 border border-green-500/20 text-center">
+                      <div className="text-[10px] uppercase font-bold text-green-400 mb-1">Room Active</div>
+                      <div className="text-xl font-mono font-bold tracking-tighter">{roomId}</div>
+                   </div>
+                   <button 
+                     onClick={() => {
+                        navigator.clipboard.writeText(roomId);
+                        alert("Room ID copied!");
+                     }}
+                     className="w-full py-2.5 rounded-xl bg-white/5 border border-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/10 transition-colors"
+                   >
+                     Copy Invite ID
+                   </button>
+                   <button 
+                     onClick={() => setRoomId(null)}
+                     className="w-full py-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-[10px] font-bold uppercase tracking-widest text-red-400 hover:bg-red-500/20 transition-colors"
+                   >
+                     Leave Room
+                   </button>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 4. SETTINGS MODAL */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, x: 20 }}
+            animate={{ opacity: 1, scale: 1, x: 0 }}
+            exit={{ opacity: 0, scale: 0.9, x: 20 }}
+            className="fixed top-16 right-8 w-80 z-[100] rounded-[2.5rem] shadow-2xl border flex flex-col overflow-hidden"
+            style={{ 
+              backgroundColor: colors.panel, 
+              backdropFilter: 'blur(40px)', 
+              borderColor: colors.border,
+              color: colors.text,
+              maxHeight: '80vh'
+            }}
+          >
+            {/* Header - Non-scrolling */}
+            <div className="flex justify-between items-center p-6 pb-2">
+              <span className="font-bold text-sm tracking-widest uppercase opacity-60">Settings</span>
+              <button onClick={() => setShowSettings(false)} className="opacity-40 hover:opacity-100 transition-opacity"><X size={18} /></button>
+            </div>
+            
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto px-6 pb-8 custom-scrollbar">
+              <div className="space-y-6 pt-4">
+                 <div>
+                    <label className="text-[10px] uppercase tracking-wider opacity-40 mb-3 block">Theme</label>
+                    <div className="flex flex-wrap gap-3">
+                      <ThemeBtn active={theme === 'light'} icon={<Sun size={18}/>} onClick={() => setTheme('light')} label="Light" />
+                      <ThemeBtn active={theme === 'dark'} icon={<Moon size={18}/>} onClick={() => setTheme('dark')} label="Dark" />
+                      <ThemeBtn active={theme === 'pink'} icon={<Heart size={18}/>} onClick={() => setTheme('pink')} label="Pink" />
+                      <ThemeBtn active={theme === 'cream'} icon={<Coffee size={18}/>} onClick={() => setTheme('cream')} label="Cream" />
+                      <ThemeBtn active={theme === 'cyber'} icon={<Zap size={18}/>} onClick={() => setTheme('cyber')} label="Cyber" />
+                     </div>
+                 </div>
+  
+                 <div className="pt-4 border-t border-white/10">
+                    <label className="text-[10px] uppercase tracking-wider opacity-40 mb-3 block">Canvas Style</label>
+                    <div className="flex flex-wrap gap-3">
+                      <ThemeBtn active={canvasStyle === 'none'} icon={<Square size={18}/>} onClick={() => setCanvasStyle('none')} label="None" />
+                      <ThemeBtn active={canvasStyle === 'grid'} icon={<Grid3x3 size={18}/>} onClick={() => setCanvasStyle('grid')} label="Grid" />
+                      <ThemeBtn active={canvasStyle === 'lines'} icon={<AlignJustify size={18}/>} onClick={() => setCanvasStyle('lines')} label="Lines" />
+                      <ThemeBtn active={canvasStyle === 'dots'} icon={<GripHorizontal size={18}/>} onClick={() => setCanvasStyle('dots')} label="Dots" />
+                    </div>
+                 </div>
+                 
+                 <div className="pt-4 border-t border-white/10 space-y-3">
+                    <label className="text-[10px] uppercase tracking-wider opacity-40 mb-1 block">Session</label>
+                    <input type="file" ref={sessionInputRef} className="hidden" accept=".vision" onChange={handleSessionImport} />
+                    
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={exportSession}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-[11px] font-bold"
+                      >
+                        <Download size={14} /> Export
+                      </button>
+                      <button 
+                        onClick={() => sessionInputRef.current?.click()}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-[11px] font-bold"
+                      >
+                        <Upload size={14} /> Import
+                      </button>
+                    </div>
+  
+                    <button onClick={() => { if(window.confirm("Clear all?")) { clearLines(); setShowSettings(false); } }} className="w-full flex items-center justify-between p-3 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors mt-2">
+                      <span className="text-xs font-bold">Clear Workspace</span>
+                      <Trash2 size={16} />
+                    </button>
+                 </div>
+              </div>
             </div>
           </motion.div>
         )}
@@ -422,6 +549,10 @@ export default function App() {
             icon={<Hand size={20} />} 
             isActive={tool === 'hand'} 
             onClick={() => setTool('hand')} 
+            onDoubleClick={() => { 
+               updatePosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }); 
+               updateScale(1); 
+            }}
             label="Hand"
             shortcut="0"
             iconColor={colors.icon}
@@ -506,14 +637,35 @@ export default function App() {
           <div className="w-[1px] h-8 mx-1 opacity-20" style={{ backgroundColor: colors.icon }} />
 
           <DockItem icon={<Download size={20} />} onClick={exportSession} label="Export Session" shortcut="Ctrl+S" iconColor={colors.icon} accent={colors.icon} />
-          <DockItem icon={<Settings size={20} />} onClick={() => setShowSettings(!showSettings)} label="Settings" iconColor={colors.icon} accent={colors.icon} />
+          <DockItem 
+            icon={<Users size={20} />} 
+            isActive={showCollab} 
+            onClick={() => {
+              setShowCollab(!showCollab);
+              setShowSettings(false);
+            }} 
+            label="Collaboration" 
+            iconColor={colors.icon} 
+            accent={colors.icon} 
+          />
+          <DockItem 
+            icon={<Settings size={20} />} 
+            isActive={showSettings}
+            onClick={() => {
+              setShowSettings(!showSettings);
+              setShowCollab(false);
+            }} 
+            label="Settings" 
+            iconColor={colors.icon} 
+            accent={colors.icon} 
+          />
         </motion.div>
       </div>
     </div>
   );
 }
  
-  function DockItem({ icon, isActive, onClick, onContextMenu, label, shortcut, iconColor, accent, disabled }) {
+  function DockItem({ icon, isActive, onClick, onDoubleClick, onContextMenu, label, shortcut, iconColor, accent, disabled }) {
     const [isHovered, setIsHovered] = useState(false);
     return (
       <div className="relative flex flex-col items-center">
@@ -536,6 +688,7 @@ export default function App() {
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
           onClick={disabled ? undefined : onClick}
+          onDoubleClick={disabled ? undefined : onDoubleClick}
        onContextMenu={onContextMenu}
        whileHover={disabled ? {} : { y: -8, scale: 1.15 }}
        whileTap={disabled ? {} : { scale: 0.9 }}

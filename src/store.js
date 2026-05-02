@@ -1,4 +1,7 @@
 import { create } from 'zustand';
+import { io } from 'socket.io-client';
+
+const SERVER_URL = 'http://localhost:3001'; // Default local, will be updated to Render URL
 
 const themes = {
   dark: {
@@ -64,7 +67,8 @@ const pushHistory = (state) => {
 // ─────────────────────────────────────────────────────────
 
 export const useStore = create((set, get) => ({
-  theme: 'dark',
+  theme: 'cream',
+  canvasStyle: 'grid', // 'none', 'grid', 'lines', 'dots'
   tool: 'select',
   color: '#ffffff',
   brushSize: 5,
@@ -87,6 +91,7 @@ export const useStore = create((set, get) => ({
 
   // ── Settings ──────────────────────────────────────────
   setTheme: (theme) => set({ theme }),
+  setCanvasStyle: (canvasStyle) => set({ canvasStyle }),
   setTool: (tool) => set({ tool }),
   setColor: (color) => set({ color }),
   setBrushSize: (size) => set({ brushSize: size }),
@@ -100,50 +105,71 @@ export const useStore = create((set, get) => ({
   saveHistory: () => set((state) => ({ ...pushHistory(state) })),
 
   // ── Lines ─────────────────────────────────────────────
-  addLine: (line) => set((state) => ({
-    ...pushHistory(state),
-    lines: [...state.lines, line]
-  })),
+  addLine: (line) => {
+    set((state) => ({
+      ...pushHistory(state),
+      lines: [...state.lines, line]
+    }));
+    get().broadcast('ADD_LINE', line);
+  },
   updateLastLine: (updatedLine) => set((state) => {
     const newLines = [...state.lines];
     newLines[newLines.length - 1] = updatedLine;
     return { lines: newLines };
   }),
-  updateLine: (id, updates, push = false) => set((state) => ({
-    ...(push ? pushHistory(state) : {}),
-    lines: state.lines.map((line, i) => {
-      const lineId = line.id || `line-${i}`;
-      return lineId === id ? { ...line, ...updates } : line;
-    })
-  })),
+  updateLine: (id, updates, push = false) => {
+    set((state) => ({
+      ...(push ? pushHistory(state) : {}),
+      lines: state.lines.map((line, i) => {
+        const lineId = line.id || `line-${i}`;
+        return lineId === id ? { ...line, ...updates } : line;
+      })
+    }));
+    get().broadcast('UPDATE_LINE', { id, updates });
+  },
 
   // ── Texts ─────────────────────────────────────────────
-  addText: (text) => set((state) => ({
-    ...pushHistory(state),
-    texts: [...state.texts, text]
-  })),
-  updateText: (id, updates, push = false) => set((state) => ({
-    ...(push ? pushHistory(state) : {}),
-    texts: state.texts.map(t => t.id === id ? { ...t, ...updates } : t)
-  })),
+  addText: (text) => {
+    set((state) => ({
+      ...pushHistory(state),
+      texts: [...state.texts, text]
+    }));
+    get().broadcast('ADD_TEXT', text);
+  },
+  updateText: (id, updates, push = false) => {
+    set((state) => ({
+      ...(push ? pushHistory(state) : {}),
+      texts: state.texts.map(t => t.id === id ? { ...t, ...updates } : t)
+    }));
+    get().broadcast('UPDATE_TEXT', { id, updates });
+  },
 
   // ── Objects ───────────────────────────────────────────
-  addObject: (obj) => set((state) => ({
-    ...pushHistory(state),
-    objects: [...state.objects, obj]
-  })),
-  updateObject: (id, updates, push = false) => set((state) => ({
-    ...(push ? pushHistory(state) : {}),
-    objects: state.objects.map(obj => obj.id === id ? { ...obj, ...updates } : obj)
-  })),
+  addObject: (obj) => {
+    set((state) => ({
+      ...pushHistory(state),
+      objects: [...state.objects, obj]
+    }));
+    get().broadcast('ADD_OBJECT', obj);
+  },
+  updateObject: (id, updates, push = false) => {
+    set((state) => ({
+      ...(push ? pushHistory(state) : {}),
+      objects: state.objects.map(obj => obj.id === id ? { ...obj, ...updates } : obj)
+    }));
+    get().broadcast('UPDATE_OBJECT', { id, updates });
+  },
 
   // ── Delete ────────────────────────────────────────────
-  deleteItems: (ids) => set((state) => ({
-    ...pushHistory(state),
-    lines: state.lines.filter((l, i) => !ids.includes(l.id || `line-${i}`)),
-    texts: state.texts.filter(t => !ids.includes(t.id)),
-    objects: state.objects.filter(o => !ids.includes(o.id))
-  })),
+  deleteItems: (ids) => {
+    set((state) => ({
+      ...pushHistory(state),
+      lines: state.lines.filter((l, i) => !ids.includes(l.id || `line-${i}`)),
+      texts: state.texts.filter(t => !ids.includes(t.id)),
+      objects: state.objects.filter(o => !ids.includes(o.id))
+    }));
+    get().broadcast('DELETE_ITEMS', { ids });
+  },
 
   // ── Undo / Redo ───────────────────────────────────────
   undo: () => set((state) => {
@@ -178,10 +204,76 @@ export const useStore = create((set, get) => ({
     _future: []
   })),
 
-  clearLines: () => set((state) => ({
-    ...pushHistory(state),
-    lines: [], texts: [], objects: []
-  })),
+  clearLines: () => {
+    set((state) => ({
+      ...pushHistory(state),
+      lines: [], texts: [], objects: []
+    }));
+    get().broadcast('CLEAR_ALL', {});
+  },
+
+  // ── Multiplayer ──────────────────────────────────────
+  socket: null,
+  roomId: null,
+  remoteCursors: {},
+
+  setRoomId: (id) => set({ roomId: id }),
+
+  initializeSocket: (url = SERVER_URL) => {
+    const socket = io(url);
+    
+    socket.on('canvas-update', ({ type, data }) => {
+      const state = useStore.getState();
+      switch (type) {
+        case 'CURSOR_MOVE':
+          set({ 
+            remoteCursors: { 
+              ...state.remoteCursors, 
+              [data.userId]: data.pos 
+            } 
+          });
+          break;
+        case 'ADD_LINE': 
+          set({ lines: [...state.lines, data] }); 
+          break;
+        case 'UPDATE_LINE':
+          set({ lines: state.lines.map(l => (l.id === data.id ? { ...l, ...data.updates } : l)) });
+          break;
+        case 'ADD_TEXT':
+          set({ texts: [...state.texts, data] });
+          break;
+        case 'UPDATE_TEXT':
+          set({ texts: state.texts.map(t => (t.id === data.id ? { ...t, ...data.updates } : t)) });
+          break;
+        case 'ADD_OBJECT':
+          set({ objects: [...state.objects, data] });
+          break;
+        case 'UPDATE_OBJECT':
+          set({ objects: state.objects.map(o => (o.id === data.id ? { ...o, ...data.updates } : o)) });
+          break;
+        case 'DELETE_ITEMS':
+          set({
+            lines: state.lines.filter(l => !data.ids.includes(l.id)),
+            texts: state.texts.filter(t => !data.ids.includes(t.id)),
+            objects: state.objects.filter(o => !data.ids.includes(o.id))
+          });
+          break;
+        case 'CLEAR_ALL':
+          set({ lines: [], texts: [], objects: [] });
+          break;
+      }
+    });
+
+    set({ socket });
+    return socket;
+  },
+
+  broadcast: (type, data) => {
+    const { socket, roomId } = useStore.getState();
+    if (socket && roomId) {
+      socket.emit('canvas-update', { roomId, data: { type, data: { ...data, userId: socket.id } } });
+    }
+  },
 
   getThemeColors: () => themes[useStore.getState().theme || 'dark']
 }));

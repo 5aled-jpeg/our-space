@@ -1,0 +1,17 @@
+{
+  "name": "vision-workspace-server",
+  "version": "1.0.0",
+  "description": "Signaling and Sync server for Vision Workspace",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "socket.io": "^4.8.0",
+    "nanoid": "^5.0.7"
+  }
+}
